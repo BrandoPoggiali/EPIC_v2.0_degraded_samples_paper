@@ -71,7 +71,7 @@ bg_intensities_plot <- ggplot(qc_df_sorted, aes(x = mean_oob_grn, y = mean_oob_r
   scale_y_continuous(expand = c(0, 0), limits = c(0, 1500), labels = label_comma()) +
   theme_bw()
 
-ggsave(file.path(results_qc_dir, "bg_intensities_plot.png"), bg_intensities_plot, width = 6, height = 4.5)
+ggsave(file.path(results_qc_dir, "bg_intensities_plot.png"), bg_intensities_plot, width = 6, height = 4.5, dpi = 600, bg = "white")
 
 
 # Plot 2 & 3: Mean Signal Intensity and Red/Green Ratio (using the custom function)
@@ -114,19 +114,48 @@ genotype_plot <- ggplot(genotype_rs_long, aes(x = Probes, y = Sample, fill = Int
 
 ggsave(file.path(results_qc_dir, "genotype_heatmap.png"), genotype_plot, width = 14, height = 8.5)
 
-message("QC analysis complete. Plots saved to ", results_qc_dir)
+
+#### 6. Remove specific samples from the analysis (Optional)----------------------------------------------
+
+#Remove samples from betas
+betas_subset <- betas[,!grepl("95bp", colnames(betas))]
+betas_subset <- betas_subset[, !colnames(betas_subset) %in% c("165bp_10ng_A","165bp_10ng_B")]
+
+#Remove NAs
+betas_noNAs_subset <- na.omit(betas_subset)
+betas_noNAs_cg_subset <- betas_noNAs_subset[grepl("cg", rownames(betas_noNAs_subset)),]
+betas_noNAs_cg_subset_coll <- betasCollapseToPfx(as.matrix(betas_noNAs_cg_subset))
+
+#With NAs
+# betas_cg_subset <- betas_subset[grepl("cg", rownames(betas_subset)),]
+# betas_cg_subset_coll <- betasCollapseToPfx(as.matrix(betas_cg_subset))
+
+#Remove samples from metadata
+metadata <- metadata[!grepl("95bp", metadata$Sample_code),]
+metadata <- metadata[! metadata$Sample_code %in% c("165bp_10ng_A","165bp_10ng_B"),]
+dim(metadata)
+dim(betas_noNAs_cg_subset)
 
 
+#Remove samples from vector with sorted names
+sorted_codes <- sorted_codes[!grepl("95bp", sorted_codes)]
+sorted_codes <- sorted_codes[! sorted_codes %in% c("165bp_10ng_A","165bp_10ng_B")]
 
+betas_noNAs_cg_coll_sorted <- betas_noNAs_cg_subset_coll[, sorted_codes]
 
-# Removal of probes with NAs
+saveRDS(betas_noNAs_cg_subset, file.path(processed_data_dir, "betas_preprocessed_QC_samples.rds"))
+saveRDS(metadata, file.path(processed_data_dir, "metadata_preprocessed_QC_samples.rds"))
+
+#### 7. PCA on beta values ----------------------------------------
+
+# Removal of probes with NAs (If needed all samples)
 betas_noNAs <- na.omit(betas)
 dim(betas_noNAs) # 6200 32
 betas_noNAs_cg <- betas_noNAs[grepl("cg", rownames(betas_noNAs)),]
 
 
 #Principal Component analysis, only on not missing probes which are present in all the samples
-betas_noNAs_cg_coll <- betasCollapseToPfx(as.matrix(betas_noNAs_cg))
+betas_noNAs_cg_coll <- betasCollapseToPfx(as.matrix(betas_noNAs_cg)) # Perform PCA with all samples or only QC passing samples
 betas_noNAs_cg_subset_coll <- betasCollapseToPfx(as.matrix(betas_noNAs_cg_subset))
 dim(betas_noNAs_cg_coll)
 
@@ -164,9 +193,11 @@ combined_PCA_plot <- ggarrange(PCA_all, spacer, PCA_subset,
                                common.legend = TRUE,
                                widths = c(1, 0.2, 1))
 
-ggsave(paste0(results_path,"/1_Quality_control/Combined_PCA_plot_17-07-2024.png"), 
-       combined_PCA_plot, width = 10, height = 4, dpi = 600, bg = "white")
+ggsave(file.path(results_qc_dir, "PCA_all_samples_and_QC_passing_samples.png"), combined_PCA_plot, width = 6, height = 4.5, dpi = 600, bg = "white")
 
+
+
+#### 8. Missing probes investigation ----------------------------------------
 
 #Calculation of all missing probes number and recurrent for DNA size and DNA input condition
 #get masked probes
@@ -267,8 +298,8 @@ combined_plot_nas <- ggarrange(spacer, venn.plot_bp , spacer, venn.plot_ng, spac
                                ncol = 5, nrow = 1,
                                widths = c(0.1, 1, 0.1, 1, 0.1))
 combined_plot_nas
-ggsave(paste0(results_path,"/1_Quality_control/Missing_data_per_bp_and_ng_20-12-2024.png"), 
-       combined_plot_nas, width = 8.5, height = 3.6, dpi = 600, bg = "white")
+
+ggsave(file.path(results_qc_dir, "Missing_data_per_bp_and_ng.png"), combined_plot_nas, width = 6, height = 4.5, dpi = 600, bg = "white")
 
 #Create excel file with missing probes
 # Combine vectors into a data frame with different lengths
@@ -295,6 +326,142 @@ data <- data.frame(
 
 # Export to Excel
 
-write.xlsx(data, file = paste0(results_path,"/1_Quality_control/Missing_probes_20-12-2024.xlsx"),
+write.xlsx(data, file = paste0(results_qc_dir,"/Missing_probes.xlsx"),
            sheetName = "Missing data", rowNames = FALSE)
+
+
+message("QC analysis complete. Plots saved to ", results_qc_dir)
+
+
+#### 9. Check Beta value distribution (This step require high amount of memory). -----------------------------
+beta_vals_long <- betas %>% as.tibble() %>% #If you want to test type I or II probes just change the initial dataset
+  add_column(CpG = rownames(betas)) %>%
+  gather(Sample_code, beta_value, 1:33) 
+
+colnames(beta_vals_long)[1] <- "Probe_ID"
+
+beta_vals_long$Sample_code[beta_vals_long$Sample_code == "no_degraded_250ng"] <- "Control"
+
+#Crete column for plotting
+beta_vals_long <- beta_vals_long %>%
+  mutate(Sample_group = ifelse(substr(beta_vals_long$Sample_code, nchar(beta_vals_long$Sample_code) - 1, nchar(beta_vals_long$Sample_code)) %in% c("_A", "_B"),
+                               substr(Sample_code, 1, nchar(Sample_code) - 2),
+                               Sample_code))
+
+sorted_codes[1] <- "Control"
+
+beta_vals_long$Sample_code <- factor(beta_vals_long$Sample_code, level=sorted_codes)
+beta_vals_long$Sample_group <- factor(beta_vals_long$Sample_group, level=c(sorted_codes[1],
+                                                                           unique(substring(sorted_codes[-1], 1, nchar(sorted_codes[-1])-2))))
+
+# Plot DNA sizes of 350 bp
+unique_samples <- sort(unique(beta_vals_long$Sample_group))
+unique_samples <- as.character(unique_samples)
+
+samples_distribution_350bp <- ggplot(data = beta_vals_long[substr(beta_vals_long$Sample_code,1,3) %in% c("350","Con"),]) +
+  geom_density(aes(x = beta_value, color = Sample_code), size = 1) +
+  labs(x = "Beta value", y = "Density", title="350 bp") +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1)) +
+  scale_y_continuous(expand = c(0, 0)) + theme_bw() +
+  scale_color_manual(values = setNames(c("darkgrey", "black","black", "#f2d93a","#f2d93a", 
+                                         "#39a2a4","#39a2a4", "#f20000", "#f20000"),
+                                       c("Control", sorted_codes[grepl("350", sorted_codes)])),
+                     labels = c("Control", substring(sorted_codes[grepl("350", sorted_codes)],7,nchar(sorted_codes[grepl("350", sorted_codes)])-2))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(color="Sample type") 
+
+
+# Plot DNA sizes of 230 bp
+samples_distribution_230bp <- ggplot(data = beta_vals_long[substr(beta_vals_long$Sample_code,1,3) %in% c("230","Con"),]) +
+  geom_density(aes(x = beta_value, color = Sample_code), size = 1) +
+  labs(x = "Beta value", y = "Density", title="230 bp") +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1)) +
+  scale_y_continuous(expand = c(0, 0)) + theme_bw() +
+  scale_color_manual(values = setNames(c( "darkgrey", "black","black", "#f2d93a","#f2d93a", 
+                                          "#39a2a4","#39a2a4", "#f20000", "#f20000"),
+                                       c("Control", sorted_codes[grepl("230", sorted_codes)])),
+                     labels = c("Control", substring(sorted_codes[grepl("230", sorted_codes)],7,nchar(sorted_codes[grepl("230", sorted_codes)])-2))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(color="Sample type") 
+
+# Plot DNA sizes of 165 bp
+samples_distribution_165bp <- ggplot(data = beta_vals_long[substr(beta_vals_long$Sample_code,1,3) %in% c("165","Con"),]) +
+  geom_density(aes(x = beta_value, color = Sample_code), size = 1) +
+  labs(x = "Beta value", y = "Density", title="165 bp") +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1)) +
+  scale_y_continuous(expand = c(0, 0)) + theme_bw() +
+  scale_color_manual(values = setNames(c( "darkgrey", "black","black", "#f2d93a","#f2d93a", 
+                                          "#39a2a4","#39a2a4", "#f20000", "#f20000"),
+                                       c("Control", sorted_codes[grepl("165", sorted_codes)])),
+                     labels = c("Control", substring(sorted_codes[grepl("165", sorted_codes)],7,nchar(sorted_codes[grepl("165", sorted_codes)])-2))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(color="Sample type") 
+
+# Plot DNA sizes of 95 bp
+samples_distribution_95bp <- ggplot(data = beta_vals_long[substr(beta_vals_long$Sample_code,1,2) %in% c("95","Co"),]) +
+  geom_density(aes(x = beta_value, color = Sample_code), size = 1) +
+  labs(x = "Beta value", y = "Density", title="95 bp") +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.25, 0.5, 0.75, 1), limits = c(0, 1)) +
+  scale_y_continuous(expand = c(0, 0)) + theme_bw() +
+  scale_color_manual(values = setNames(c( "darkgrey", "black","black", "#f2d93a","#f2d93a", 
+                                          "#39a2a4","#39a2a4", "#f20000", "#f20000"),
+                                       c("Control", sorted_codes[grepl("95", sorted_codes)])),
+                     labels = c("Control", substring(sorted_codes[grepl("95", sorted_codes)],6,nchar(sorted_codes[grepl("95", sorted_codes)])-2))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(color="Sample type") 
+
+spacer <- ggplot() + theme_void()
+combined_plot <- ggarrange(samples_distribution_350bp, spacer, samples_distribution_230bp, spacer,
+                           samples_distribution_165bp, spacer, samples_distribution_95bp, spacer,
+                           labels = c("A", "", "B","", "C", "", "D", ""),
+                           ncol = 4, nrow = 2,
+                           common.legend = TRUE,
+                           legend = "bottom",
+                           widths = c(1, 0.01, 1, 0.01))
+
+ggsave(file.path(results_qc_dir, "Beta_value_distributions.png"), combined_plot_nas, width = 6, height = 4.5, dpi = 600, bg = "white")
+
+
+
+#### 10. Probe detection rate ----------------------------------------
+unique(substring(row.names(betas_subset),1 ,2))
+dim(betas_subset)
+betas_subset <- betas_subset[substring(row.names(betas_subset),1 ,2) %in% c("cg", "ch", "rs"),]
+dim(betas_subset)
+
+frac_df <- colSums(!is.na(betas_subset))/(nrow(betas_subset)-32896 ) #Total number of probes 903335
+frac_df <- frac_df[match(sorted_codes[1:23], names(frac_df))]
+num_df <- colSums(!is.na(betas_subset))
+num_df <- num_df[match(sorted_codes[1:23], names(num_df))]
+
+probes_performance_df <- data.frame(
+  Sample_code = names(frac_df),
+  frac_dt = as.numeric(frac_df),
+  num_dt = as.numeric(num_df)
+)
+
+probes_performance_df <- probes_performance_df[-1,] # remove degraded samples, %fraction: 0.9998627, and 903211 probes 
+probes_performance_df$Sample_combination <- substr(probes_performance_df$Sample_code, 1, nchar(probes_performance_df$Sample_code) - 2)
+
+probes_performance_df <- probes_performance_df %>%
+  group_by(Sample_combination) %>%
+  summarize(across(.cols = everything(), .fns = mean, na.rm = TRUE), .groups = "drop")
+
+probes_performance_df$DNA_size <- str_extract(probes_performance_df$Sample_combination, "\\d+(?=bp)")
+probes_performance_df$DNA_input <- str_extract(probes_performance_df$Sample_combination, "\\d+(?=ng)")
+
+probes_performance_df$DNA_size <- factor(probes_performance_df$DNA_size, level=c("350", "230", "165"))
+probes_performance_df$DNA_input <- factor(probes_performance_df$DNA_input, level=c("100", "50", "20", "10"))
+
+probe_success_rate_plot <- plot_metric_table(probes_performance_df, x_variable=probes_performance_df$DNA_size, 
+                                      y_variable=probes_performance_df$DNA_input, frac_succ_probes=probes_performance_df$frac_dt,
+                                      number_of_probes=probes_performance_df$num_dt,
+                                      x_axis_title = "DNA fragment size (bp)", y_axis_title = "DNA input (ng)")
+
+
+ggsave(file.path(results_qc_dir, "Plot_success_rate_and_n_probes.png"), probe_success_rate_plot, width = 6, height = 4.5, dpi = 600, bg = "white")
+
+
+
+
 
