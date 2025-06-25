@@ -70,7 +70,7 @@ ann_epic_v2$Name_cpg <- ifelse(
 ah <- AnnotationHub()
 # Query for the Ensembl database for Homo sapiens, release 111
 ensdb_query <- query(ah, c("EnsDb", "Homo sapiens", "111"))
-edb <- ensdb_query[[1]] # Load the database
+edb <- ensdb_query[[1]] # Load the newest database
 
 # Get gene and promoter locations as GRanges objects
 tx <- transcripts(edb)
