@@ -461,7 +461,3 @@ probe_success_rate_plot <- plot_metric_table(probes_performance_df, x_variable=p
 
 ggsave(file.path(results_qc_dir, "Plot_success_rate_and_n_probes.png"), probe_success_rate_plot, width = 6, height = 4.5, dpi = 600, bg = "white")
 
-
-
-
-
